@@ -68,9 +68,6 @@ Parameters:
     AllowedPattern: '^(arn:aws:acm:us-east-1:[0-9]{12}:certificate\/[a-f0-9-]{36})?$'
     ConstraintDescription: Must be a valid ACM certificate ARN in us-east-1 region or empty string
   
-  referer:
-    Type: String
-    Default: "yDKJMKfdD65e3"
 
 Conditions:
   HasHostedZone: !Not [!Equals [!Ref hostedZoneId, ""]]
@@ -103,9 +100,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      # WebsiteConfiguration:
-      #   IndexDocument: index.html
-      #   ErrorDocument: index.html
       VersioningConfiguration:
         Status: Suspended
       BucketEncryption:
@@ -332,20 +326,6 @@ Resources:
             Condition:
               StringEquals:
                 aws:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
-          
-          # Enforce HTTPS/TLS for all requests
-          # - Sid: DenyInsecureConnections
-          #   Effect: Deny
-          #   Principal: "*"
-          #   Action: "s3:*"
-          #   Resource:
-          #     - !GetAtt StaticWebsiteBucket.Arn
-          #     - !Sub
-          #       - '${BucketArn}/*'
-          #       - BucketArn: !GetAtt StaticWebsiteBucket.Arn
-          #   Condition:
-          #     Bool:
-          #       aws:SecureTransport: "false"
 
   # Route 53 DNS Record (conditional)
   DNSRecord:
@@ -367,12 +347,6 @@ Outputs:
     Value: !Ref StaticWebsiteBucket
     Export:
       Name: !Sub "${AWS::StackName}-BucketName"
-
-  BucketWebsiteURL:
-    Description: Name of the S3 bucket for static website hosting
-    Value: !GetAtt StaticWebsiteBucket.WebsiteURL
-    Export:
-      Name: !Sub "${AWS::StackName}-BucketWebsiteURL"
   
   DistributionDomainName:
     Description: CloudFront distribution domain name
