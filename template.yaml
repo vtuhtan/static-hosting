@@ -1,0 +1,394 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  Static Hosting SAM Template
+  
+  A reusable SAM template for deploying static websites with CloudFront distribution,
+  S3 bucket storage, and optional Route 53 DNS integration. Provides standardized
+  approach to hosting static content with CDN capabilities and domain management.
+
+Metadata:
+  AWS::ServerlessRepo::Application:
+    Name: static-hosting-template
+    Description: Reusable SAM template for static website hosting with CloudFront and optional DNS
+    Author: Static Hosting Template
+    SpdxLicenseId: MIT
+    LicenseUrl: LICENSE
+    ReadmeUrl: README.md
+    Labels: ['static-hosting', 'cloudfront', 's3', 'route53', 'cdn']
+    HomePageUrl: https://github.com/example/static-hosting-template
+    SemanticVersion: 1.0.0
+    SourceCodeUrl: https://github.com/example/static-hosting-template
+
+Parameters:
+  client:
+    Type: String
+    Description: Client identifier for resource tagging and naming
+    MinLength: 1
+    MaxLength: 50
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+    ConstraintDescription: Must contain only alphanumeric characters and hyphens
+  
+  websiteName:
+    Type: String
+    Description: Website name used for resource naming and subdomain
+    MinLength: 1
+    MaxLength: 50
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+    ConstraintDescription: Must contain only alphanumeric characters and hyphens
+  
+  hostedZoneId:
+    Type: String
+    Default: ""
+    Description: Route 53 hosted zone ID for DNS integration (optional - leave empty to skip DNS setup)
+    AllowedPattern: '^(Z[A-Z0-9]{13})?$'
+    ConstraintDescription: Must be a valid Route 53 hosted zone ID or empty string
+
+  recordName:
+    Type: String
+    Default: "www"
+    Description: Subdomain name for the website (e.g., 'www' for www.example.com)
+    MinLength: 1
+    MaxLength: 63
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+    ConstraintDescription: Must contain only alphanumeric characters and hyphens
+
+  domainName:
+    Type: String
+    Default: ""
+    Description: Domain name for custom domain (e.g., 'example.com' - required when using DNS integration)
+    AllowedPattern: '^([a-zA-Z0-9-]+\.)*[a-zA-Z0-9-]+$|^$'
+    ConstraintDescription: Must be a valid domain name or empty string
+
+  certificateArn:
+    Type: String
+    Default: ""
+    Description: SSL certificate ARN for custom domain (required when using DNS integration)
+    AllowedPattern: '^(arn:aws:acm:us-east-1:[0-9]{12}:certificate\/[a-f0-9-]{36})?$'
+    ConstraintDescription: Must be a valid ACM certificate ARN in us-east-1 region or empty string
+  
+  referer:
+    Type: String
+    Default: "yDKJMKfdD65e3"
+
+Conditions:
+  HasHostedZone: !Not [!Equals [!Ref hostedZoneId, ""]]
+  HasCertificate: !Not [!Equals [!Ref certificateArn, ""]]
+  HasDomainName: !Not [!Equals [!Ref domainName, ""]]
+  HasCustomDomain: !And 
+    - !Condition HasHostedZone
+    - !Condition HasCertificate
+    - !Condition HasDomainName
+
+Mappings:
+  TaggingStrategy:
+    CommonTags:
+      Purpose: StaticHosting
+      ManagedBy: SAMTemplate
+      Environment: Production
+
+Globals:
+  Function:
+    Timeout: 3
+
+Resources:
+  # S3 Bucket for static website hosting
+  StaticWebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${client}-${websiteName}-static-hosting-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      # WebsiteConfiguration:
+      #   IndexDocument: index.html
+      #   ErrorDocument: index.html
+      VersioningConfiguration:
+        Status: Suspended
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Client
+          Value: !Ref client
+        - Key: WebsiteName
+          Value: !Ref websiteName
+        - Key: Purpose
+          Value: !FindInMap [TaggingStrategy, CommonTags, Purpose]
+        - Key: ManagedBy
+          Value: !FindInMap [TaggingStrategy, CommonTags, ManagedBy]
+        - Key: Environment
+          Value: !FindInMap [TaggingStrategy, CommonTags, Environment]
+
+  # Origin Access Control for CloudFront to access S3
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub "${client}-${websiteName}-oac"
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+        Description: !Sub "Origin Access Control for ${client}-${websiteName} static hosting - Client: ${client}, Website: ${websiteName}, Purpose: StaticHosting"
+
+  # Cache Policy for website content (shorter TTL for HTML/dynamic content)
+  WebsiteCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "${client}-${websiteName}-website-cache-policy"
+        Comment: !Sub "Cache policy for website content with shorter TTL - Client: ${client}, Website: ${websiteName}"
+        DefaultTTL: 86400  # 1 day
+        MaxTTL: 31536000   # 1 year
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          QueryStringsConfig:
+            QueryStringBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+
+  # Cache Policy for assets (longer TTL for static assets)
+  AssetsCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub "${client}-${websiteName}-assets-cache-policy"
+        Comment: !Sub "Cache policy for static assets with longer TTL - Client: ${client}, Website: ${websiteName}"
+        DefaultTTL: 2592000  # 30 days
+        MaxTTL: 31536000     # 1 year
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          QueryStringsConfig:
+            QueryStringBehavior: none
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+
+  # Response Headers Policy for security headers
+  SecurityHeadersPolicy:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub "${client}-${websiteName}-security-headers"
+        Comment: !Sub "Security headers policy for static hosting - Client: ${client}, Website: ${websiteName}"
+        SecurityHeadersConfig:
+          StrictTransportSecurity:
+            AccessControlMaxAgeSec: 31536000
+            IncludeSubdomains: true
+            Override: false
+          ContentTypeOptions:
+            Override: false
+          FrameOptions:
+            FrameOption: DENY
+            Override: false
+          ReferrerPolicy:
+            ReferrerPolicy: strict-origin-when-cross-origin
+            Override: false
+        CustomHeadersConfig:
+          Items:
+            - Header: X-Content-Security-Policy
+              Value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'"
+              Override: false
+            - Header: Cache-Control
+              Value: "public, max-age=31536000"
+              Override: false
+
+  # CloudFront Distribution
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub "CloudFront distribution for ${client}-${websiteName} static hosting"
+        Aliases: !If
+          - HasCustomDomain
+          - - !Sub "${recordName}.${domainName}"
+          - !Ref "AWS::NoValue"
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        PriceClass: PriceClass_100
+        ViewerCertificate: !If
+          - HasCustomDomain
+          - AcmCertificateArn: !Ref certificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt StaticWebsiteBucket.DomainName
+            OriginAccessControlId: !GetAtt OriginAccessControl.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          # Custom cache policy for website content with shorter TTL
+          CachePolicyId: !Ref WebsiteCachePolicy
+          OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # Managed-CORS-S3Origin
+          ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+        CacheBehaviors:
+          # Separate cache behavior for assets subfolder with longer TTL
+          - PathPattern: "assets/*"
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            CachePolicyId: !Ref AssetsCachePolicy
+            OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # Managed-CORS-S3Origin
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+          - PathPattern: "favicon.ico"
+            TargetOriginId: S3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            CachePolicyId: !Ref AssetsCachePolicy
+            OriginRequestPolicyId: 88a5eaf4-2fd4-4709-b370-b4c650ea3fcf  # Managed-CORS-S3Origin
+            ResponseHeadersPolicyId: !Ref SecurityHeadersPolicy
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 404
+            ResponseCode: 404
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 500
+            ResponseCode: 500
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 502
+            ResponseCode: 502
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 503
+            ResponseCode: 503
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+          - ErrorCode: 504
+            ResponseCode: 504
+            ResponsePagePath: /error.html
+            ErrorCachingMinTTL: 60
+      Tags:
+        - Key: Client
+          Value: !Ref client
+        - Key: WebsiteName
+          Value: !Ref websiteName
+        - Key: Purpose
+          Value: !FindInMap [TaggingStrategy, CommonTags, Purpose]
+        - Key: ManagedBy
+          Value: !FindInMap [TaggingStrategy, CommonTags, ManagedBy]
+        - Key: Environment
+          Value: !FindInMap [TaggingStrategy, CommonTags, Environment]
+
+  # S3 Bucket Policy to allow CloudFront access and enforce security
+  StaticWebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticWebsiteBucket
+      PolicyDocument:
+        Statement:
+          # Allow CloudFront to access all content (root and assets)
+          - Sid: AllowReferer
+            Effect: Allow
+            Principal: 
+              Service: 'cloudfront.amazonaws.com'
+            Action: s3:GetObject
+            Resource: 
+              !Sub
+                - '${BucketArn}/*'
+                - BucketArn: !GetAtt StaticWebsiteBucket.Arn
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+          
+          # Enforce HTTPS/TLS for all requests
+          # - Sid: DenyInsecureConnections
+          #   Effect: Deny
+          #   Principal: "*"
+          #   Action: "s3:*"
+          #   Resource:
+          #     - !GetAtt StaticWebsiteBucket.Arn
+          #     - !Sub
+          #       - '${BucketArn}/*'
+          #       - BucketArn: !GetAtt StaticWebsiteBucket.Arn
+          #   Condition:
+          #     Bool:
+          #       aws:SecureTransport: "false"
+
+  # Route 53 DNS Record (conditional)
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasCustomDomain
+    Properties:
+      HostedZoneId: !Ref hostedZoneId
+      Name: !Sub "${recordName}.${domainName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2  # CloudFront hosted zone ID (global constant)
+        EvaluateTargetHealth: false
+      Comment: !Sub "DNS record for ${client}-${websiteName} static hosting - Client: ${client}, Website: ${websiteName}"
+  
+Outputs:
+  BucketName:
+    Description: Name of the S3 bucket for static website hosting
+    Value: !Ref StaticWebsiteBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketName"
+
+  BucketWebsiteURL:
+    Description: Name of the S3 bucket for static website hosting
+    Value: !GetAtt StaticWebsiteBucket.WebsiteURL
+    Export:
+      Name: !Sub "${AWS::StackName}-BucketWebsiteURL"
+  
+  DistributionDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-DistributionDomainName"
+  
+  DistributionId:
+    Description: CloudFront distribution ID for cache invalidation
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub "${AWS::StackName}-DistributionId"
+
+  CustomDomainUrl:
+    Condition: HasCustomDomain
+    Description: Custom domain URL for the website
+    Value: !Sub "https://${recordName}.${domainName}"
+    Export:
+      Name: !Sub "${AWS::StackName}-CustomDomainUrl"
