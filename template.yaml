@@ -10,16 +10,16 @@ Description: >
 
 Metadata:
   AWS::ServerlessRepo::Application:
-    Name: static-hosting-template
+    Name: static-hosting
     Description: Reusable SAM template for static website hosting with CloudFront and optional DNS
-    Author: Static Hosting Template
+    Author: Vjeran Tuhtan
     SpdxLicenseId: MIT
     LicenseUrl: LICENSE
     ReadmeUrl: README.md
     Labels: ['static-hosting', 'cloudfront', 's3', 'route53', 'cdn']
-    HomePageUrl: https://github.com/example/static-hosting-template
+    HomePageUrl: https://github.com/vtuhtan/static-hosting
     SemanticVersion: 1.0.0
-    SourceCodeUrl: https://github.com/example/static-hosting-template
+    SourceCodeUrl: https://github.com/vtuhtan/static-hosting
 
 Parameters:
   client:
